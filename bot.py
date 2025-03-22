@@ -1,10 +1,19 @@
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
-import requests
+import os
 import logging
 import threading
 import time
+import asyncio
 from cachetools import TTLCache
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+    ContextTypes
+)
+import requests
 
 # Настройка логгирования
 logging.basicConfig(
@@ -130,25 +139,25 @@ def get_min_price(slug: str) -> float:
         logger.error(f"Ошибка обработки данных: {e}")
         return None
 
-def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
-    update.message.reply_text(
+    await update.message.reply_text(
         '🏟️ Добро пожаловать в Sorare Price Bot!\n'
         'Введите имя футболиста (например, "Messi"):'
     )
 
-def handle_text(update: Update, context: CallbackContext) -> int:
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка текстового ввода пользователя"""
     player_name = update.message.text.strip()
     
     if not player_name:
-        update.message.reply_text("❌ Пожалуйста, введите имя игрока")
+        await update.message.reply_text("❌ Пожалуйста, введите имя игрока")
         return ConversationHandler.END
     
     players = search_players(player_name)
     
     if not players:
-        update.message.reply_text("🔍 Игрок не найден")
+        await update.message.reply_text("🔍 Игрок не найден")
         return ConversationHandler.END
         
     if len(players) > 1:
@@ -158,16 +167,16 @@ def handle_text(update: Update, context: CallbackContext) -> int:
             one_time_keyboard=True,
             resize_keyboard=True
         )
-        update.message.reply_text(
+        await update.message.reply_text(
             "🔢 Найдено несколько игроков. Выберите нужного:",
             reply_markup=reply_markup
         )
         context.user_data["players"] = players
         return SELECT_PLAYER
         
-    return handle_player_selection(update, context, players[0])
+    return await handle_player_selection(update, context, players[0])
 
-def handle_player_selection(update: Update, context: CallbackContext, player: dict = None) -> int:
+async def handle_player_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, player: dict = None) -> int:
     """Обработка выбора игрока"""
     if not player:
         selected_name = update.message.text
@@ -175,7 +184,7 @@ def handle_player_selection(update: Update, context: CallbackContext, player: di
         player = next((p for p in players if p["displayName"] == selected_name), None)
     
     if not player:
-        update.message.reply_text("❌ Ошибка выбора игрока")
+        await update.message.reply_text("❌ Ошибка выбора игрока")
         return ConversationHandler.END
         
     try:
@@ -190,17 +199,17 @@ def handle_player_selection(update: Update, context: CallbackContext, player: di
                 f"🔄 Данные обновлены: {time.strftime('%H:%M:%S')}"
             )
             
-        update.message.reply_text(response_text)
+        await update.message.reply_text(response_text)
         
     except Exception as e:
         logger.error(f"Ошибка при обработке игрока: {e}")
-        update.message.reply_text("⚠️ Произошла ошибка при получении данных")
+        await update.message.reply_text("⚠️ Произошла ошибка при получении данных")
         
     return ConversationHandler.END
 
-def cancel(update: Update, context: CallbackContext) -> int:
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена диалога"""
-    update.message.reply_text("❌ Операция отменена")
+    await update.message.reply_text("❌ Операция отменена")
     return ConversationHandler.END
 
 def main() -> None:
@@ -210,27 +219,24 @@ def main() -> None:
     ping_thread.start()
 
     # Инициализация бота
-    updater = Updater("YOUR_TELEGRAM_TOKEN_HERE")
-    dispatcher = updater.dispatcher
+    application = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
 
     # Настройка обработчиков диалогов
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.text & ~Filters.command, handle_text)],
+        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
         states={
-            SELECT_PLAYER: [MessageHandler(Filters.text, handle_player_selection)]
+            SELECT_PLAYER: [MessageHandler(filters.TEXT, handle_player_selection)]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
 
     # Регистрация обработчиков
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(conv_handler)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler)
 
     # Запуск бота
-    updater.start_polling()
-    logger.info("Бот успешно запущен")
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
